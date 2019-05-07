@@ -15,7 +15,7 @@
 
 import 'dart:async';
 
-import 'package:grpc/src/client/channel.dart';
+import 'package:meta/meta.dart';
 
 import 'call.dart';
 import 'options.dart';
@@ -39,22 +39,32 @@ enum ConnectionState {
   shutdown
 }
 
-class ClientConnection {
+abstract class RequestHandler {
+  String get authority;
+  GrpcTransportStream makeRequest(String path, Duration timeout,
+      Map<String, String> metadata, ErrorHandler onRequestFailure);
+}
+
+abstract class ClientConnectionInterface implements RequestHandler {
+  void dispatchCall(ClientCall call);
+  Future<void> terminate();
+  Future<void> shutdown();
+}
+
+class ClientConnection implements ClientConnectionInterface {
   final ChannelOptions options;
-  final Future<Transport> Function() _connectTransport;
 
   ConnectionState _state = ConnectionState.idle;
-  void Function(ClientConnection connection) onStateChanged;
   final _pendingCalls = <ClientCall>[];
 
-  Transport _transport;
+  final Transport _transport;
 
   /// Used for idle and reconnect timeout, depending on [_state].
   Timer _timer;
   Duration _currentReconnectDelay;
   String get authority => _transport.authority;
 
-  ClientConnection(this.options, this._connectTransport);
+  ClientConnection(this.options, Transport transport) : _transport = transport;
 
   ConnectionState get state => _state;
 
@@ -63,13 +73,11 @@ class ClientConnection {
         _state != ConnectionState.transientFailure) {
       return;
     }
-    _setState(ConnectionState.connecting);
-    _connectTransport().then((transport) {
+    setState(ConnectionState.connecting);
+    _transport.connect().then((connectionClosed) {
+      connectionClosed.then((_) => handleConnectionClosed);
       _currentReconnectDelay = null;
-      _transport = transport;
-      _transport.onActiveStateChanged = _handleActiveStateChanged;
-      _transport.onSocketClosed = _handleSocketClosed;
-      _setState(ConnectionState.ready);
+      setState(ConnectionState.ready);
       _pendingCalls.forEach(_startCall);
       _pendingCalls.clear();
     }).catchError(_handleConnectionFailure);
@@ -117,7 +125,7 @@ class ClientConnection {
   Future<void> shutdown() async {
     if (_state == ConnectionState.shutdown) return null;
     _setShutdownState();
-    await _transport?.finish();
+    await _transport.finish();
   }
 
   /// Terminates this connection.
@@ -130,25 +138,22 @@ class ClientConnection {
   }
 
   void _setShutdownState() {
-    _setState(ConnectionState.shutdown);
+    setState(ConnectionState.shutdown);
     _cancelTimer();
     _pendingCalls.forEach(_shutdownCall);
     _pendingCalls.clear();
   }
 
-  void _setState(ConnectionState state) {
+  @visibleForTesting
+  void setState(ConnectionState state) {
     _state = state;
-    if (onStateChanged != null) {
-      onStateChanged(this);
-    }
   }
 
   void _handleIdleTimeout() {
     if (_timer == null || _state != ConnectionState.ready) return;
     _cancelTimer();
-    _transport?.finish()?.catchError((_) => {}); // TODO(jakobr): Log error.
-    _transport = null;
-    _setState(ConnectionState.idle);
+    _transport.finish().catchError((_) => {}); // TODO(jakobr): Log error.
+    setState(ConnectionState.idle);
   }
 
   void _cancelTimer() {
@@ -156,7 +161,8 @@ class ClientConnection {
     _timer = null;
   }
 
-  void _handleActiveStateChanged(bool isActive) {
+  @visibleForTesting
+  void handleActiveStateChanged(bool isActive) {
     if (isActive) {
       _cancelTimer();
     } else {
@@ -173,7 +179,7 @@ class ClientConnection {
   }
 
   void _handleConnectionFailure(error) {
-    _transport = null;
+    _transport.reset();
     if (_state == ConnectionState.shutdown || _state == ConnectionState.idle) {
       return;
     }
@@ -181,7 +187,7 @@ class ClientConnection {
     _cancelTimer();
     _pendingCalls.forEach((call) => _failCall(call, error));
     _pendingCalls.clear();
-    _setState(ConnectionState.idle);
+    setState(ConnectionState.idle);
   }
 
   void _handleReconnect() {
@@ -190,9 +196,10 @@ class ClientConnection {
     _connect();
   }
 
-  void _handleSocketClosed() {
+  @visibleForTesting
+  void handleConnectionClosed() {
     _cancelTimer();
-    _transport = null;
+    _transport.reset();
 
     if (_state == ConnectionState.idle && _state == ConnectionState.shutdown) {
       // All good.
@@ -202,12 +209,12 @@ class ClientConnection {
     // We were not planning to close the socket.
     if (!_hasPendingCalls()) {
       // No pending calls. Just hop to idle, and wait for a new RPC.
-      _setState(ConnectionState.idle);
+      setState(ConnectionState.idle);
       return;
     }
 
     // We have pending RPCs. Reconnect after backoff delay.
-    _setState(ConnectionState.transientFailure);
+    setState(ConnectionState.transientFailure);
     _currentReconnectDelay = options.backoffStrategy(_currentReconnectDelay);
     _timer = new Timer(_currentReconnectDelay, _handleReconnect);
   }

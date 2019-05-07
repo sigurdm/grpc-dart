@@ -20,41 +20,13 @@ import 'dart:html';
 
 import 'package:grpc/grpc_web.dart';
 import 'package:grpc/src/client/transport/xhr_transport.dart';
+import 'package:grpc/src/client/web_channel.dart';
 import 'package:grpc/src/shared/message.dart';
 import 'package:mockito/mockito.dart';
 
 import 'package:test/test.dart';
 
 class MockHttpRequest extends Mock implements HttpRequest {}
-
-class MockXhrTransport extends XhrTransport {
-  final StreamController<Event> readyStateChangeStream =
-      StreamController<Event>();
-  final StreamController<ProgressEvent> progressStream =
-      StreamController<ProgressEvent>();
-
-  MockHttpRequest mockRequest;
-
-  MockXhrTransport(this.mockRequest) : super(Uri.parse('test:8080'));
-
-  @override
-  GrpcTransportStream makeRequest(String path, Duration timeout,
-      Map<String, String> metadata, ErrorHandler onError) {
-    when(mockRequest.onReadyStateChange)
-        .thenAnswer((_) => readyStateChangeStream.stream);
-    when(mockRequest.onProgress).thenAnswer((_) => progressStream.stream);
-
-    initializeRequest(mockRequest, metadata);
-
-    return XhrTransportStream(mockRequest, onError);
-  }
-
-  @override
-  Future<void> terminate() async {
-    readyStateChangeStream.close();
-    progressStream.close();
-  }
-}
 
 void main() {
   test('Make request sends correct headers', () async {

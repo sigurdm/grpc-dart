@@ -21,7 +21,10 @@ typedef void SocketClosedHandler();
 typedef void ActiveStateHandler(bool isActive);
 typedef void ErrorHandler(error);
 
+/// Represents one grpc communication stream.
 abstract class GrpcTransportStream {
+  /// Starts sending the request.
+  void send();
   Stream<GrpcMessage> get incomingMessages;
   StreamSink<List<int>> get outgoingMessages;
 
@@ -29,13 +32,30 @@ abstract class GrpcTransportStream {
 }
 
 abstract class Transport {
-  ActiveStateHandler onActiveStateChanged;
-  SocketClosedHandler onSocketClosed;
-
   String get authority;
-  Future<void> connect();
+
+  /// Opens a new connection (if needed).
+  ///
+  /// Completes with a `Future` that completes if that connection closes.
+  ///
+  /// If there is no underlying connection, completes with a Future that never
+  /// completes.
+  Future<Future<void>> connect();
+
+  /// Sends a request on the currently open connection.
+  ///
+  /// If based on an underlying connection, that has to be open.
   GrpcTransportStream makeRequest(String path, Duration timeout,
       Map<String, String> metadata, ErrorHandler onRequestFailure);
+
+  /// Finish the underlying connection.
+  ///
+  /// No new streams will be accepted or can be created.
   Future<void> finish();
+
+  /// Terminate the underlying connection.
   Future<void> terminate();
+
+  /// Throw away the current underlying connection.
+  void reset();
 }

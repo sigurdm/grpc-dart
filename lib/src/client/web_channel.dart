@@ -14,29 +14,64 @@
 // limitations under the License.
 
 import 'dart:async';
+import 'dart:html';
 
+import '../shared/status.dart';
+import 'call.dart';
 import 'channel.dart';
 import 'connection.dart';
+import 'method.dart';
 import 'options.dart';
 import 'transport/transport.dart';
 import 'transport/xhr_transport.dart';
 
-/// A channel to a grpc-web endpoint.
-class GrpcWebClientChannel extends ClientChannelBase {
+/// A client channel to a grpc-web endpoint.
+abstract class GrpcWebClientChannel implements ClientChannel {
+  factory GrpcWebClientChannel.xhr(Uri uri,
+          {ChannelOptions options: const ChannelOptions()}) =>
+      new XhrGrpcWebClientChannelImpl(uri, options);
+}
+
+class XhrGrpcWebClientChannelImpl
+    implements GrpcWebClientChannel, RequestHandler {
   final Uri uri;
   ChannelOptions options;
+  bool _isShutdown = false;
+  List<ClientCall> pendingCalls = <ClientCall>[];
 
-  GrpcWebClientChannel.xhr(this.uri, {this.options: const ChannelOptions()})
-      : super();
+  XhrGrpcWebClientChannelImpl(this.uri, this.options);
 
-  Future<Transport> _connectXhrTransport() async {
-    final result = XhrTransport(uri);
-    await result.connect();
-    return result;
+  String get authority => uri.authority;
+
+  @override
+  GrpcTransportStream makeRequest(String path, Duration timeout,
+      Map<String, String> metadata, errorHandler) {
+    final _request = HttpRequest();
+    _request.open('POST', uri.resolve(path).toString());
+
+    return XhrTransportStream(_request, metadata, (e) {
+      throw "Connection error $e";
+    })
+      ..send();
   }
 
   @override
-  ClientConnection createConnection() {
-    return ClientConnection(options, _connectXhrTransport);
+  ClientCall<Q, R> createCall<Q, R>(
+      ClientMethod<Q, R> method, Stream<Q> requests, CallOptions options) {
+    if (_isShutdown) throw GrpcError.unavailable('Channel shutting down.');
+    final call = ClientCall(method, requests, options)..sendRequest(this);
+    pendingCalls.add(call);
+    return call;
+  }
+
+  @override
+  Future<void> shutdown() async {
+    _isShutdown = true;
+  }
+
+  @override
+  Future<void> terminate() async {
+    pendingCalls.forEach((call) => call.cancel());
+    _isShutdown = true;
   }
 }

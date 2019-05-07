@@ -27,6 +27,7 @@ import 'web_streams.dart';
 class XhrTransportStream implements GrpcTransportStream {
   final HttpRequest _request;
   final ErrorHandler _onError;
+  final Map<String, String> _metadata;
   int _requestBytesRead = 0;
   final StreamController<ByteBuffer> _incomingProcessor = StreamController();
   final StreamController<GrpcMessage> _incomingMessages = StreamController();
@@ -38,7 +39,24 @@ class XhrTransportStream implements GrpcTransportStream {
   @override
   StreamSink<List<int>> get outgoingMessages => _outgoingMessages.sink;
 
-  XhrTransportStream(this._request, this._onError) {
+  @visibleForTesting
+  static void initializeRequest(HttpRequest request, Map<String, String> metadata) {
+    for (final header in metadata.keys) {
+      request.setRequestHeader(header, metadata[header]);
+    }
+    request.setRequestHeader('Content-Type', 'application/grpc-web+proto');
+    request.setRequestHeader('X-User-Agent', 'grpc-web-dart/0.1');
+    request.setRequestHeader('X-Grpc-Web', '1');
+    // Overriding the mimetype allows us to stream and parse the data
+    request.overrideMimeType('text/plain; charset=x-user-defined');
+    request.responseType = 'text';
+  }
+
+  XhrTransportStream(this._request, this._metadata, this._onError);
+
+  @override
+  void send() {
+    initializeRequest(_request, _metadata);
     _outgoingMessages.stream
         .map(frame)
         .listen((data) => _request.send(data), cancelOnError: true);
@@ -52,12 +70,13 @@ class XhrTransportStream implements GrpcTransportStream {
           _onHeadersReceived();
           break;
         case HttpRequest.DONE:
-          if (_request.status != 200) {
-            _onError(GrpcError.unavailable(
-                'XhrConnection status ${_request.status}'));
-          } else {
-            _close();
-          }
+          _close();
+//          if (_request.status != 200) {
+//            _onError(GrpcError.unavailable(
+//                'XhrConnection status ${_request.status}'));
+//          } else {
+//            _close();
+//          }
           break;
       }
     });
@@ -77,6 +96,13 @@ class XhrTransportStream implements GrpcTransportStream {
       // Use response over responseText as most browsers don't support
       // using responseText during an onProgress event.
       final responseString = _request.response as String;
+      if (_requestBytesRead > responseString.length) {
+        print("Bad responseString ${_request.status} ${responseString.length} $_requestBytesRead ${_request.readyState}");
+      }
+
+      if (responseString == null) {
+        print("Null responseString ${_request.status}");
+      }
       final bytes = Uint8List.fromList(
               responseString.substring(_requestBytesRead).codeUnits)
           .buffer;
@@ -127,47 +153,4 @@ class XhrTransportStream implements GrpcTransportStream {
     _close();
     _request.abort();
   }
-}
-
-class XhrTransport extends Transport {
-  final Uri uri;
-
-  HttpRequest _request;
-
-  XhrTransport(this.uri);
-
-  String get authority => uri.authority;
-
-  @override
-  Future<void> connect() async {}
-
-  @override
-  Future<void> finish() async {}
-
-  @visibleForTesting
-  void initializeRequest(HttpRequest request, Map<String, String> metadata) {
-    for (final header in metadata.keys) {
-      request.setRequestHeader(header, metadata[header]);
-    }
-    request.setRequestHeader('Content-Type', 'application/grpc-web+proto');
-    request.setRequestHeader('X-User-Agent', 'grpc-web-dart/0.1');
-    request.setRequestHeader('X-Grpc-Web', '1');
-    // Overriding the mimetype allows us to stream and parse the data
-    request.overrideMimeType('text/plain; charset=x-user-defined');
-    request.responseType = 'text';
-  }
-
-  @override
-  GrpcTransportStream makeRequest(String path, Duration timeout,
-      Map<String, String> metadata, ErrorHandler onError) {
-    _request = HttpRequest();
-    _request.open('POST', uri.resolve(path).toString());
-
-    initializeRequest(_request, metadata);
-
-    return XhrTransportStream(_request, onError);
-  }
-
-  @override
-  Future<void> terminate() async {}
 }

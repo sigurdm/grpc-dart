@@ -15,8 +15,6 @@
 
 import 'dart:async';
 
-import 'package:grpc/src/client/call.dart';
-import 'package:grpc/src/client/channel.dart';
 import 'package:grpc/src/client/channel.dart';
 import 'package:grpc/src/client/client.dart';
 import 'package:grpc/src/client/common.dart';
@@ -40,27 +38,26 @@ GrpcData validateClientDataMessage(List<int> message) {
   return decoded;
 }
 
-class MockTransport extends Mock implements Transport {}
-
-class MockStream extends Mock implements GrpcTransportStream {}
-
-class FakeConnection extends ClientConnection {
+class MockTransport extends Mock implements Transport {
   var connectionError;
 
-  FakeConnection._(String host, Transport transport, ChannelOptions options,
-      Future<Transport> Function() connectTransport)
-      : super(options, connectTransport);
+  @override
+  void reset() {}
 
-  factory FakeConnection(
-      String host, Transport transport, ChannelOptions options) {
-    FakeConnection f;
-    f = FakeConnection._(host, transport, options, () async {
-      if (f.connectionError != null) throw f.connectionError;
-      return transport;
-    });
-    return f;
+  @override
+  Future<void> finish() async {}
+
+  @override
+  Future<Future<void>> connect() async {
+    if (connectionError != null) throw connectionError;
+    return Completer().future;
   }
+
+  @override
+  Future<void> terminate() async {}
 }
+
+class MockStream extends Mock implements GrpcTransportStream {}
 
 Duration testBackoff(Duration lastBackoff) => const Duration(milliseconds: 1);
 
@@ -118,9 +115,22 @@ class TestClient extends Client {
   }
 }
 
+class StateObservingConnection extends ClientConnection {
+  void Function(ConnectionState newState) onStateChanged;
+
+  StateObservingConnection(options, transport) : super(options, transport);
+  @override
+  void setState(ConnectionState state) {
+    super.setState(state);
+    if (onStateChanged != null) {
+      onStateChanged(state);
+    }
+  }
+}
+
 class ClientHarness {
   MockTransport transport;
-  FakeConnection connection;
+  StateObservingConnection connection;
   FakeChannel channel;
   FakeChannelOptions channelOptions;
   MockStream stream;
@@ -131,15 +141,14 @@ class ClientHarness {
   TestClient client;
 
   void setUp() {
+    stream = new MockStream();
     transport = new MockTransport();
     channelOptions = new FakeChannelOptions();
-    connection = new FakeConnection('test', transport, channelOptions);
+    connection = new StateObservingConnection(channelOptions, transport);
     channel = new FakeChannel('test', connection, channelOptions);
-    stream = new MockStream();
     fromClient = new StreamController();
     toClient = new StreamController();
     when(transport.makeRequest(any, any, any, any)).thenReturn(stream);
-    when(transport.onActiveStateChanged = captureAny).thenReturn(null);
     when(stream.outgoingMessages).thenReturn(fromClient.sink);
     when(stream.incomingMessages).thenAnswer((_) => toClient.stream);
     client = new TestClient(channel);
@@ -165,10 +174,7 @@ class ClientHarness {
   }
 
   void signalIdle() {
-    final ActiveStateHandler handler =
-        verify(transport.onActiveStateChanged = captureAny).captured.single;
-    expect(handler, isNotNull);
-    handler(false);
+    connection.handleActiveStateChanged(false);
   }
 
   Future<void> runTest(

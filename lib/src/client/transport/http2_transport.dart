@@ -36,7 +36,9 @@ class Http2TransportStream extends GrpcTransportStream {
   Stream<GrpcMessage> get incomingMessages => _incomingMessages.stream;
   StreamSink<List<int>> get outgoingMessages => _outgoingMessages.sink;
 
-  Http2TransportStream(this._transportStream, this._onError) {
+  Http2TransportStream(this._transportStream, this._onError);
+
+  void send() {
     _transportStream.incomingMessages
         .transform(new GrpcHttpDecoder())
         .transform(grpcDecompressor())
@@ -110,7 +112,7 @@ class Http2Transport extends Transport {
   }
 
   @override
-  Future<void> connect() async {
+  Future<Future<void>> connect() async {
     var socket = await Socket.connect(host, port);
 
     final securityContext = credentials.securityContext;
@@ -120,8 +122,8 @@ class Http2Transport extends Transport {
           context: securityContext,
           onBadCertificate: _validateBadCertificate);
     }
-    socket.done.then(_handleSocketClosed);
     transportConnection = ClientTransportConnection.viaSocket(socket);
+    return socket.done;
   }
 
   @override
@@ -130,17 +132,23 @@ class Http2Transport extends Transport {
     final headers = createCallHeaders(
         credentials.isSecure, authority, path, timeout, metadata);
     final stream = transportConnection.makeRequest(headers);
-    return new Http2TransportStream(stream, onError);
+    return new Http2TransportStream(stream, onError)..send();
   }
 
   @override
   Future<void> finish() async {
-    await transportConnection.finish();
+    await transportConnection?.finish();
+    transportConnection = null;
   }
 
   @override
   Future<void> terminate() async {
-    await transportConnection.terminate();
+    await transportConnection?.terminate();
+  }
+
+  @override
+  void reset() {
+    transportConnection = null;
   }
 
   bool _validateBadCertificate(X509Certificate certificate) {
@@ -149,11 +157,5 @@ class Http2Transport extends Transport {
 
     if (validator == null) return false;
     return validator(certificate, authority);
-  }
-
-  void _handleSocketClosed(_) {
-    if (onSocketClosed != null) {
-      onSocketClosed();
-    }
   }
 }

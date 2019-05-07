@@ -331,10 +331,9 @@ void main() {
 
   test('Connection errors are reported', () async {
     final connectionStates = <ConnectionState>[];
-    harness.connection.connectionError = 'Connection error';
-    harness.connection.onStateChanged = (connection) {
-      final state = connection.state;
-      connectionStates.add(state);
+    harness.transport.connectionError = 'Connection error';
+    harness.connection.onStateChanged = (newState) {
+      connectionStates.add(newState);
     };
 
     final expectedException =
@@ -350,10 +349,9 @@ void main() {
   test('Connections time out if idle', () async {
     final done = new Completer();
     final connectionStates = <ConnectionState>[];
-    harness.connection.onStateChanged = (connection) {
-      final state = connection.state;
-      connectionStates.add(state);
-      if (state == ConnectionState.idle) done.complete();
+    harness.connection.onStateChanged = (newState) {
+      connectionStates.add(newState);
+      if (newState == ConnectionState.idle) done.complete();
     };
 
     harness.channelOptions.idleTimeout = const Duration(microseconds: 10);

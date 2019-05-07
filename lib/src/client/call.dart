@@ -83,18 +83,20 @@ class ClientCall<Q, R> implements Response {
   }
 
   void onConnectionReady(ClientConnection connection) {
-    if (isCancelled) return;
+    sendRequest(connection);
+  }
 
+  Future<Map<String, String>> prepareMetaData(String authority) {
     if (options.metadataProviders.isEmpty) {
-      _sendRequest(connection, _sanitizeMetadata(options.metadata));
+      return Future.value(_sanitizeMetadata(options.metadata));
     } else {
       final metadata = new Map<String, String>.from(options.metadata);
-      Future.forEach(
+      return Future.forEach(
               options.metadataProviders,
-              (provider) => provider(
-                  metadata, "${connection.authority}${audiencePath(_method)}"))
-          .then((_) => _sendRequest(connection, _sanitizeMetadata(metadata)))
-          .catchError(_onMetadataProviderError);
+              (provider) =>
+                  provider(metadata, '${authority}${audiencePath(_method)}'))
+          .catchError(_onMetadataProviderError)
+          .then((m) => _sanitizeMetadata(m));
     }
   }
 
@@ -102,24 +104,27 @@ class ClientCall<Q, R> implements Response {
     _terminateWithError(new GrpcError.internal('Error making call: $error'));
   }
 
-  void _sendRequest(ClientConnection connection, Map<String, String> metadata) {
-    try {
-      _stream = connection.makeRequest(
-          _method.path, options.timeout, metadata, _onRequestError);
-    } catch (e) {
-      _terminateWithError(new GrpcError.unavailable('Error making call: $e'));
-      return;
-    }
-    _requestSubscription = _requests
-        .map(_method.requestSerializer)
-        .handleError(_onRequestError)
-        .listen(_stream.outgoingMessages.add,
-            onError: _stream.outgoingMessages.addError,
-            onDone: _stream.outgoingMessages.close,
-            cancelOnError: true);
-    // The response stream might have been listened to before _stream was ready,
-    // so try setting up the subscription here as well.
-    _onResponseListen();
+  void sendRequest(RequestHandler requestHandler) {
+    if (isCancelled) return;
+    prepareMetaData(requestHandler.authority).then((metadata) {
+      try {
+        _stream = requestHandler.makeRequest(
+            _method.path, options.timeout, metadata, _onRequestError);
+      } catch (e) {
+        _terminateWithError(new GrpcError.unavailable('Error making call: $e'));
+        return;
+      }
+      _requestSubscription = _requests
+          .map(_method.requestSerializer)
+          .handleError(_onRequestError)
+          .listen(_stream.outgoingMessages.add,
+              onError: _stream.outgoingMessages.addError,
+              onDone: _stream.outgoingMessages.close,
+              cancelOnError: true);
+      // The response stream might have been listened to before _stream was ready,
+      // so try setting up the subscription here as well.
+      _onResponseListen();
+    });
   }
 
   void _onTimedOut() {

@@ -43,7 +43,7 @@ class MockHttp2Transport extends Http2Transport {
       : super(host, port, credentials);
 
   @override
-  Future<void> connect() async {
+  Future<Future<void>> connect() async {
     transportConnection = MockTransport();
 
     when(transportConnection.makeRequest(any)).thenAnswer((call) {
@@ -60,6 +60,7 @@ class MockHttp2Transport extends Http2Transport {
 
       return mockClientStream;
     });
+    return Completer().future;
   }
 
   @override

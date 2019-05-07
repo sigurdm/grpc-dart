@@ -13,13 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import 'dart:async';
-
 import 'channel.dart';
 import 'connection.dart';
 import 'transport/http2_credentials.dart';
 import 'transport/http2_transport.dart';
-import 'transport/transport.dart';
 
 /// A channel to a virtual gRPC endpoint.
 ///
@@ -35,14 +32,8 @@ class ClientChannel extends ClientChannelBase {
       {this.port = 443, this.options = const ChannelOptions()})
       : super();
 
-  Future<Transport> _connectTransport() async {
-    final result = Http2Transport(host, port, options.credentials);
-    await result.connect();
-    return result;
-  }
-
   @override
   ClientConnection createConnection() {
-    return ClientConnection(options, _connectTransport);
+    return ClientConnection(options, Http2Transport(host, port, options.credentials));
   }
 }
