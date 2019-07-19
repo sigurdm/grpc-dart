@@ -102,19 +102,27 @@ class Server {
     server.listen((socket) {
       final connection = ServerTransportConnection.viaSocket(socket);
       _connections.add(connection);
-      ServerHandler_ handler;
+      // Keep track of all handlers, so they can be cancelled if the socket is
+      // closed.
+      final handlers = Set<ServerHandler_>.identity();
       // TODO(jakobr): Set active state handlers, close connection after idle
       // timeout.
-      connection.incomingStreams.listen((stream) {
-        handler = serveStream_(stream);
+      connection.incomingStreams.listen((ServerTransportStream stream) {
+        final handler = serveStream_(stream);
+        handlers.add(handler);
+        stream.outgoingMessages.done.then((_) {
+          return handlers.remove(handler);
+        });
       }, onError: (error) {
         print('Connection error: $error');
       }, onDone: () {
-        // TODO(sigurdm): This is not correct behavior in the presence of
-        // half-closed tcp streams.
-        // Half-closed  streams seems to not be fully supported by package:http2.
-        // https://github.com/dart-lang/http2/issues/42
-        handler?.cancel();
+        for (ServerHandler_ handler in handlers) {
+          // TODO(sigurdm): This is not correct behavior in the presence of
+          // half-closed tcp streams.
+          // Half-closed streams seems to not be fully supported by package:http2.
+          // https://github.com/dart-lang/http2/issues/42
+          handler.cancel();
+        }
         _connections.remove(connection);
       });
     }, onError: (error) {

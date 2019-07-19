@@ -71,6 +71,7 @@ class ServerHandler_ extends ServiceCall {
 
   void handle() {
     _stream.onTerminated = (_) => cancel();
+    _stream.outgoingMessages.done.then((_) => cancel());
 
     _incomingSubscription = _stream.incomingMessages
         .transform(GrpcHttpDecoder())
